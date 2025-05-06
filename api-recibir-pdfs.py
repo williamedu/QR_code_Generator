@@ -25,7 +25,7 @@ DB_NAME = "simulador(unity-access)"
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()  # Carpeta temporal para archivos subidos
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Limitar tamaño de archivos a 16MB
-app.config['OUTPUT_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "documentos_procesados")
+app.config['OUTPUT_FOLDER'] = "C:/documentos_procesados"  # Ajustar a una ruta con permisos adecuados
 
 # Crear carpeta de salida si no existe
 if not os.path.exists(app.config['OUTPUT_FOLDER']):
@@ -115,8 +115,8 @@ def extraer_datos_carta_estado(archivo_pdf):
 
 def generar_qr_con_datos(datos):
     """Genera un código QR con la información de la carta de estado"""
-    # Crear la URL que iría en el QR (simulada por ahora)
-    url_base = "https://documentos.ejemplo.com/descargar/"
+    # Crear la URL que iría en el QR con la IP y puerto del servidor
+    url_base = "http://44.201.81.192:5000/api/descargar/"
     url_documento = f"{url_base}{datos['id']}"
     
     # Crear datos para el QR
@@ -176,9 +176,9 @@ def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
         qr_pdf = canvas.Canvas(qr_buffer, pagesize=(page_width, page_height))
         
         # Configurar tamaño y posición del QR
-        qr_size = 60  # Tamaño del QR
-        margin_x = 100  # Margen desde la derecha
-        margin_y = 290  # Margen desde abajo
+        qr_size = 80  # Tamaño del QR
+        margin_x = 50  # Margen desde la derecha
+        margin_y = 50  # Margen desde abajo
         
         # Dibujar el QR
         qr_pdf.drawImage(
@@ -270,7 +270,7 @@ def procesar_archivos_pdf(carta_data, oficio_data):
             "nombre_original": carta_data["nombre_original"],
             "nombre_con_qr": f"{nombre_sin_extension}_con_QR.pdf",
             "s3_key": f"cartas/{carta_data['id']}/{carta_data['nombre_original']}",
-            "s3_url": f"https://docs-qr-bucket.s3.amazonaws.com/cartas/{carta_data['id']}/{carta_data['nombre_original']}",
+            "s3_url": f"http://44.201.81.192:5000/api/descargar/{carta_data['id']}",
             "tamano_bytes": carta_data["tamano_bytes"],
             "qr_data": qr_data,
             "descripcion": f"Carta de estado para oficio: {oficio_data['nombre_original']}",
@@ -376,16 +376,54 @@ def descargar_archivo(nombre_archivo):
         app.logger.error(f"Error al descargar archivo: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
 
+# Endpoint para descargar por ID del documento
+@app.route('/api/descargar/documento/<documento_id>', methods=['GET'])
+def descargar_por_id(documento_id):
+    """Permite descargar un documento por su ID"""
+    try:
+        # Conectar a la base de datos para buscar el documento
+        conexion = conectar_bd()
+        if not conexion:
+            return jsonify({"error": "Error de conexión a la base de datos", "success": False}), 500
+        
+        with conexion.cursor() as cursor:
+            # Buscar el documento por ID
+            cursor.execute("SELECT nombre_original FROM documentos_qr WHERE id = %s", (documento_id,))
+            resultado = cursor.fetchone()
+            
+            if not resultado:
+                return jsonify({"error": "Documento no encontrado", "success": False}), 404
+                
+            nombre_archivo = resultado["nombre_original"]
+            ruta_archivo = os.path.join(app.config['OUTPUT_FOLDER'], nombre_archivo)
+            
+            if not os.path.exists(ruta_archivo):
+                return jsonify({"error": "Archivo no encontrado en el servidor", "success": False}), 404
+                
+            return send_file(ruta_archivo, as_attachment=True)
+    
+    except Exception as e:
+        app.logger.error(f"Error al buscar documento por ID: {str(e)}")
+        return jsonify({"error": str(e), "success": False}), 500
+    finally:
+        if conexion:
+            conexion.close()
+
 if __name__ == '__main__':
     # Configurar logging
     import logging
     logging.basicConfig(level=logging.INFO)
     
-    # Iniciar el servidor
-    print("Iniciando API en http://127.0.0.1:5000")
-    print("Endpoints disponibles:")
-    print("  - GET /api/health - Verificar si la API está funcionando")
-    print("  - POST /api/procesar - Procesar los archivos PDF")
-    print("  - GET /api/descargar/<nombre_archivo> - Descargar un archivo procesado")
+    # Puerto donde se ejecutará la API
+    puerto = 5000
     
-    app.run(debug=True, host='0.0.0.0')
+    print(f"Iniciando API en http://44.201.81.192:{puerto}")
+    print("Endpoints disponibles:")
+    print(f"  - GET http://44.201.81.192:{puerto}/api/health - Verificar si la API está funcionando")
+    print(f"  - POST http://44.201.81.192:{puerto}/api/procesar - Procesar los archivos PDF")
+    print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/<nombre_archivo> - Descargar un archivo procesado")
+    print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/documento/<documento_id> - Descargar por ID")
+    
+    # Usar waitress para producción
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=puerto, threads=4)
