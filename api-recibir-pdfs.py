@@ -25,7 +25,7 @@ DB_NAME = "simulador(unity-access)"
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()  # Carpeta temporal para archivos subidos
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Limitar tamaño de archivos a 16MB
-app.config['OUTPUT_FOLDER'] = r"C:\Users\Administrator\Desktop\QR_code_Generator\documentos_procesados"  # Ajustar a una ruta con permisos adecuados
+app.config['OUTPUT_FOLDER'] = r"C:\Users\Administrator\Desktop\QR_code_Generator\documentos_procesados"  # Ruta específica
 
 # Crear carpeta de salida si no existe
 if not os.path.exists(app.config['OUTPUT_FOLDER']):
@@ -116,7 +116,7 @@ def extraer_datos_carta_estado(archivo_pdf):
 def generar_qr_con_datos(datos):
     """Genera un código QR con la información de la carta de estado"""
     # Crear la URL que iría en el QR con la IP y puerto del servidor
-    url_base = "http://44.201.81.192:5000/api/descargar/"
+    url_base = "http://44.201.81.192:5000/api/descargar/documento/"
     url_documento = f"{url_base}{datos['id']}"
     
     # Crear datos para el QR
@@ -158,7 +158,7 @@ def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
     # Nombre para el archivo resultante
     nombre_original = oficio_data["nombre_original"]
     nombre_sin_extension = os.path.splitext(nombre_original)[0]
-    nombre_salida = f"{nombre_sin_extension}_con_QR.pdf"
+    nombre_salida = f"{qr_data['id']}_{nombre_sin_extension}_con_QR.pdf"
     ruta_salida = os.path.join(app.config['OUTPUT_FOLDER'], nombre_salida)
     
     try:
@@ -176,9 +176,9 @@ def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
         qr_pdf = canvas.Canvas(qr_buffer, pagesize=(page_width, page_height))
         
         # Configurar tamaño y posición del QR
-        qr_size = 60  # Tamaño reducido del QR
-        margin_x = 100  # Margen desde la derecha
-        margin_y = 290  # Margen desde abajo - Para subir el QR
+        qr_size = 80  # Tamaño del QR
+        margin_x = 50  # Margen desde la derecha
+        margin_y = 50  # Margen desde abajo
         
         # Dibujar el QR
         qr_pdf.drawImage(
@@ -247,8 +247,10 @@ def procesar_archivos_pdf(carta_data, oficio_data):
         # 2. Generar QR con la información relevante
         qr_path, qr_data = generar_qr_con_datos(carta_data)
         
-        # 3. Guardar una copia local de la carta de estado
-        ruta_copia_carta = os.path.join(app.config['OUTPUT_FOLDER'], carta_data['nombre_original'])
+        # 3. Guardar una copia local de la carta de estado (incluir ID en el nombre)
+        nombre_con_id = f"{carta_data['id']}_{carta_data['nombre_original']}"
+        ruta_copia_carta = os.path.join(app.config['OUTPUT_FOLDER'], nombre_con_id)
+        
         with open(ruta_copia_carta, 'wb') as f:
             f.write(carta_data['pdf_data'])
         app.logger.info(f"Carta guardada en: {ruta_copia_carta}")
@@ -267,10 +269,10 @@ def procesar_archivos_pdf(carta_data, oficio_data):
         
         datos_bd = {
             "id": carta_data["id"],
-            "nombre_original": carta_data["nombre_original"],
-            "nombre_con_qr": f"{nombre_sin_extension}_con_QR.pdf",
-            "s3_key": f"cartas/{carta_data['id']}/{carta_data['nombre_original']}",
-            "s3_url": f"http://44.201.81.192:5000/api/descargar/{carta_data['id']}",
+            "nombre_original": nombre_con_id,  # Guardar con el nombre que incluye ID
+            "nombre_con_qr": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
+            "s3_key": f"cartas/{carta_data['id']}/{nombre_con_id}",
+            "s3_url": f"http://44.201.81.192:5000/api/descargar/documento/{carta_data['id']}",
             "tamano_bytes": carta_data["tamano_bytes"],
             "qr_data": qr_data,
             "descripcion": f"Carta de estado para oficio: {oficio_data['nombre_original']}",
@@ -360,14 +362,15 @@ def procesar_pdfs():
         app.logger.error(f"Error en el endpoint: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
 
-# Endpoint para descargar archivos procesados
+# Endpoint para descargar archivos procesados por nombre
 @app.route('/api/descargar/<nombre_archivo>', methods=['GET'])
 def descargar_archivo(nombre_archivo):
-    """Permite descargar un archivo procesado"""
+    """Permite descargar un archivo procesado por su nombre"""
     try:
         ruta_archivo = os.path.join(app.config['OUTPUT_FOLDER'], secure_filename(nombre_archivo))
         
         if not os.path.exists(ruta_archivo):
+            app.logger.error(f"Archivo no encontrado: {ruta_archivo}")
             return jsonify({"error": "Archivo no encontrado", "success": False}), 404
             
         return send_file(ruta_archivo, as_attachment=True)
@@ -381,33 +384,45 @@ def descargar_archivo(nombre_archivo):
 def descargar_por_id(documento_id):
     """Permite descargar un documento por su ID"""
     try:
-        # Conectar a la base de datos para buscar el documento
-        conexion = conectar_bd()
-        if not conexion:
-            return jsonify({"error": "Error de conexión a la base de datos", "success": False}), 500
+        app.logger.info(f"Buscando documento con ID: {documento_id}")
         
-        with conexion.cursor() as cursor:
-            # Buscar el documento por ID
-            cursor.execute("SELECT nombre_original FROM documentos_qr WHERE id = %s", (documento_id,))
-            resultado = cursor.fetchone()
+        # Buscar en el directorio configurado cualquier archivo que contenga el ID
+        directorio = app.config['OUTPUT_FOLDER']
+        
+        try:
+            # Listar todos los archivos en el directorio
+            archivos = os.listdir(directorio)
+            app.logger.info(f"Total de archivos en el directorio: {len(archivos)}")
             
-            if not resultado:
-                return jsonify({"error": "Documento no encontrado", "success": False}), 404
-                
-            nombre_archivo = resultado["nombre_original"]
-            ruta_archivo = os.path.join(app.config['OUTPUT_FOLDER'], nombre_archivo)
+            # Filtrar archivos que contengan el ID
+            archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo]
+            app.logger.info(f"Archivos que coinciden con el ID {documento_id}: {archivos_coincidentes}")
             
-            if not os.path.exists(ruta_archivo):
-                return jsonify({"error": "Archivo no encontrado en el servidor", "success": False}), 404
-                
-            return send_file(ruta_archivo, as_attachment=True)
-    
+            if not archivos_coincidentes:
+                app.logger.error(f"No se encontró ningún archivo con el ID: {documento_id}")
+                return jsonify({"error": "Archivo no encontrado", "success": False}), 404
+            
+            # Usar el primer archivo que coincida
+            archivo_encontrado = archivos_coincidentes[0]
+            ruta_completa = os.path.join(directorio, archivo_encontrado)
+            
+            app.logger.info(f"Archivo encontrado: {ruta_completa}")
+            
+            # Verificar si el archivo existe
+            if not os.path.exists(ruta_completa):
+                app.logger.error(f"El archivo coincidente no existe: {ruta_completa}")
+                return jsonify({"error": "Archivo existe en lista pero no en sistema", "success": False}), 404
+            
+            # Devolver el archivo
+            return send_file(ruta_completa, as_attachment=True)
+            
+        except Exception as e:
+            app.logger.error(f"Error al buscar en el directorio: {str(e)}")
+            return jsonify({"error": f"Error al buscar en el directorio: {str(e)}", "success": False}), 500
+        
     except Exception as e:
         app.logger.error(f"Error al buscar documento por ID: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
-    finally:
-        if conexion:
-            conexion.close()
 
 if __name__ == '__main__':
     # Configurar logging
@@ -421,7 +436,7 @@ if __name__ == '__main__':
     print("Endpoints disponibles:")
     print(f"  - GET http://44.201.81.192:{puerto}/api/health - Verificar si la API está funcionando")
     print(f"  - POST http://44.201.81.192:{puerto}/api/procesar - Procesar los archivos PDF")
-    print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/<nombre_archivo> - Descargar un archivo procesado")
+    print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/<nombre_archivo> - Descargar por nombre")
     print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/documento/<documento_id> - Descargar por ID")
     
     # Usar waitress para producción
