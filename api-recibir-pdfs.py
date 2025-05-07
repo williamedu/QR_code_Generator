@@ -13,6 +13,7 @@ from reportlab.pdfgen import canvas
 
 # Importaciones para la API REST
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS  # Nueva importación para CORS
 from werkzeug.utils import secure_filename
 
 # 📌 Configuración de la base de datos
@@ -23,6 +24,8 @@ DB_NAME = "simulador(unity-access)"
 
 # Configuración de la aplicación
 app = Flask(__name__)
+CORS(app)  # Habilitar CORS para todas las rutas
+
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()  # Carpeta temporal para archivos subidos
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Limitar tamaño de archivos a 16MB
 app.config['OUTPUT_FOLDER'] = r"C:\Users\Administrator\Desktop\QR_code_Generator\documentos_procesados"  # Ruta específica
