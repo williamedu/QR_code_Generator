@@ -82,9 +82,9 @@ def agregar_qr_a_pdf(pdf_path):
         qr_pdf = canvas.Canvas(qr_buffer, pagesize=(page_width, page_height))
         
         # AJUSTES: Reducir el tamaño del QR y ponerlo en la posición especificada
-        qr_size = 60  # Tamaño reducido del QR
+        qr_size = 80  # Tamaño reducido del QR
         margin_x = 100  # Margen desde la derecha
-        margin_y = 290  # Margen desde abajo - Para subir el QR
+        margin_y = 260  # Margen desde abajo - Para subir el QR
         
         qr_pdf.drawImage(
             temp_qr_file.name, 

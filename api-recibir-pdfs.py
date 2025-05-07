@@ -179,9 +179,9 @@ def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
         qr_pdf = canvas.Canvas(qr_buffer, pagesize=(page_width, page_height))
         
         # Configurar tamaño y posición del QR
-        qr_size = 60  # Tamaño reducido del QR
+        qr_size = 80  # Tamaño reducido del QR
         margin_x = 100  # Margen desde la derecha
-        margin_y = 290  # Margen desde abajo - Para subir el QR
+        margin_y = 260  # Margen desde abajo - Para subir el QR
         
         # Dibujar el QR
         qr_pdf.drawImage(
