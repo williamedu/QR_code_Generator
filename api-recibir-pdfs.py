@@ -119,7 +119,7 @@ def extraer_datos_carta_estado(archivo_pdf):
 def generar_qr_con_datos(datos):
     """Genera un código QR con la información de la carta de estado"""
     # Crear la URL que iría en el QR con la IP y puerto del servidor
-    url_base = "http://44.201.81.192:5000/api/descargar/documento/"
+    url_base = "https://menuidac.com/api/descargar/documento/"
     url_documento = f"{url_base}{datos['id']}"
     
     # Crear datos para el QR
@@ -275,7 +275,7 @@ def procesar_archivos_pdf(carta_data, oficio_data):
             "nombre_original": nombre_con_id,  # Guardar con el nombre que incluye ID
             "nombre_con_qr": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
             "s3_key": f"cartas/{carta_data['id']}/{nombre_con_id}",
-            "s3_url": f"http://44.201.81.192:5000/api/descargar/documento/{carta_data['id']}",
+            "s3_url": f"https://menuidac.com/api/descargar/documento/{carta_data['id']}",
             "tamano_bytes": carta_data["tamano_bytes"],
             "qr_data": qr_data,
             "descripcion": f"Carta de estado para oficio: {oficio_data['nombre_original']}",
@@ -435,12 +435,12 @@ if __name__ == '__main__':
     # Puerto donde se ejecutará la API
     puerto = 5000
     
-    print(f"Iniciando API en http://44.201.81.192:{puerto}")
+    print(f"Iniciando API en http://0.0.0.0:{puerto}")
     print("Endpoints disponibles:")
-    print(f"  - GET http://44.201.81.192:{puerto}/api/health - Verificar si la API está funcionando")
-    print(f"  - POST http://44.201.81.192:{puerto}/api/procesar - Procesar los archivos PDF")
-    print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/<nombre_archivo> - Descargar por nombre")
-    print(f"  - GET http://44.201.81.192:{puerto}/api/descargar/documento/<documento_id> - Descargar por ID")
+    print(f"  - GET https://menuidac.com/api/health - Verificar si la API está funcionando")
+    print(f"  - POST https://menuidac.com/api/procesar - Procesar los archivos PDF")
+    print(f"  - GET https://menuidac.com/api/descargar/<nombre_archivo> - Descargar por nombre")
+    print(f"  - GET https://menuidac.com/api/descargar/documento/<documento_id> - Descargar por ID")
     
     # Usar waitress para producción
     from waitress import serve
