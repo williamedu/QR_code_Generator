@@ -287,16 +287,19 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_separado=False):
         
         datos_bd = {
             "id": carta_data["id"],
-            "nombre_original": nombre_con_id,  # Guardar con el nombre que incluye ID
-            "nombre_con_qr": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
+            "nombre_original": carta_data['nombre_original'],  # Guardar nombre original sin ID
+            "nombre_con_qr": oficio_data['nombre_original'],   # Guardar nombre original sin ID
             "s3_key": f"cartas/{carta_data['id']}/{nombre_con_id}",
             "s3_url": f"https://menuidac.com/api/descargar/documento/{carta_data['id']}",
             "tamano_bytes": carta_data["tamano_bytes"],
             "qr_data": qr_data,
             "descripcion": f"Carta de estado para oficio: {oficio_data['nombre_original']}",
             "metadata": {
+                "ruta_carta": ruta_copia_carta,
+                "nombre_interno_carta": nombre_con_id,
                 "oficio_relacionado": oficio_data['nombre_original'],
                 "ruta_oficio_con_qr": ruta_oficio_con_qr,
+                "nombre_interno_oficio": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
                 "ruta_qr_jpg": qr_jpg_path if qr_separado else None,
                 "fecha_procesamiento": datetime.datetime.now().isoformat()
             }
@@ -392,10 +395,10 @@ def procesar_pdfs():
         app.logger.error(f"Error en el endpoint: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
 
-# Endpoint para descargar archivos procesados por nombre
+# Endpoint para descargar archivos procesados por nombre (internamente con ID)
 @app.route('/api/descargar/<nombre_archivo>', methods=['GET'])
 def descargar_archivo(nombre_archivo):
-    """Permite descargar un archivo procesado por su nombre"""
+    """Permite descargar un archivo procesado por su nombre (interno con ID)"""
     try:
         ruta_archivo = os.path.join(app.config['OUTPUT_FOLDER'], secure_filename(nombre_archivo))
         
@@ -403,6 +406,23 @@ def descargar_archivo(nombre_archivo):
             app.logger.error(f"Archivo no encontrado: {ruta_archivo}")
             return jsonify({"error": "Archivo no encontrado", "success": False}), 404
             
+        # Extraer el ID del nombre del archivo
+        partes = nombre_archivo.split('_', 1)  # Separar el ID del resto del nombre
+        if len(partes) > 1:
+            id_documento = partes[0]
+            
+            # Buscar en la base de datos el nombre original
+            nombre_descarga = obtener_nombre_original(id_documento, nombre_archivo)
+            
+            # Si es un oficio con QR, añadir sufijo
+            if "_con_QR.pdf" in nombre_archivo:
+                nombre_base, extension = os.path.splitext(nombre_descarga)
+                nombre_descarga = f"{nombre_base}_con_QR{extension}"
+            
+            # Enviar el archivo con el nombre original
+            return send_file(ruta_archivo, as_attachment=True, download_name=nombre_descarga)
+        
+        # Si no se pudo extraer un ID, usar el nombre tal cual
         return send_file(ruta_archivo, as_attachment=True)
         
     except Exception as e:
@@ -425,7 +445,7 @@ def descargar_por_id(documento_id):
             app.logger.info(f"Total de archivos en el directorio: {len(archivos)}")
             
             # Filtrar archivos que contengan el ID
-            archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo]
+            archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo and archivo.endswith('.pdf')]
             app.logger.info(f"Archivos que coinciden con el ID {documento_id}: {archivos_coincidentes}")
             
             if not archivos_coincidentes:
@@ -443,8 +463,16 @@ def descargar_por_id(documento_id):
                 app.logger.error(f"El archivo coincidente no existe: {ruta_completa}")
                 return jsonify({"error": "Archivo existe en lista pero no en sistema", "success": False}), 404
             
-            # Devolver el archivo
-            return send_file(ruta_completa, as_attachment=True)
+            # Obtener el nombre original del documento
+            nombre_descarga = obtener_nombre_original(documento_id, archivo_encontrado)
+            
+            # Si es un oficio con QR, añadir sufijo
+            if "_con_QR.pdf" in archivo_encontrado:
+                nombre_base, extension = os.path.splitext(nombre_descarga)
+                nombre_descarga = f"{nombre_base}_con_QR{extension}"
+            
+            # Devolver el archivo con el nombre original
+            return send_file(ruta_completa, as_attachment=True, download_name=nombre_descarga)
             
         except Exception as e:
             app.logger.error(f"Error al buscar en el directorio: {str(e)}")
@@ -480,12 +508,48 @@ def descargar_qr_imagen(documento_id):
             else:
                 return jsonify({"error": "Imagen QR no encontrada", "success": False}), 404
         
+        # Nombre personalizado para la descarga (primeros 5 caracteres del ID + "_QR.jpg")
+        nombre_descarga = f"{documento_id[:5]}_QR.jpg"
+        
         return send_file(ruta_qr, mimetype='image/jpeg', as_attachment=True, 
-                        download_name=f"QR_Documento_{documento_id}.jpg")
+                        download_name=nombre_descarga)
         
     except Exception as e:
         app.logger.error(f"Error al descargar imagen QR: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
+
+def obtener_nombre_original(id_documento, nombre_archivo_completo):
+    """Obtiene el nombre original del documento desde la base de datos"""
+    conexion = conectar_bd()
+    if not conexion:
+        app.logger.warning(f"No se pudo conectar a la BD para obtener el nombre original, usando nombre con ID: {nombre_archivo_completo}")
+        return nombre_archivo_completo
+    
+    try:
+        with conexion.cursor() as cursor:
+            # Consultar los datos del documento
+            cursor.execute("SELECT nombre_original, nombre_con_qr, metadata FROM documentos_qr WHERE id = %s", (id_documento,))
+            documento = cursor.fetchone()
+            
+            if documento:
+                # Determinar si estamos buscando la carta o el oficio con QR
+                if "_con_QR.pdf" in nombre_archivo_completo:
+                    return documento["nombre_con_qr"]  # Nombre original del oficio
+                else:
+                    return documento["nombre_original"]  # Nombre original de la carta
+            
+            app.logger.warning(f"No se encontró el documento con ID {id_documento} en la base de datos")
+    
+    except pymysql.MySQLError as e:
+        app.logger.error(f"Error al consultar la base de datos: {e}")
+    finally:
+        conexion.close()
+    
+    # Si hay algún problema, devolver el nombre que incluye el ID
+    partes = nombre_archivo_completo.split('_', 1)
+    if len(partes) > 1:
+        return partes[1]  # Retorna el nombre sin el ID
+    return nombre_archivo_completo
 
 if __name__ == '__main__':
     # Configurar logging
