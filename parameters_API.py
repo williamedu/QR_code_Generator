@@ -467,27 +467,62 @@ def descargar_por_id(documento_id):
                 conexion.close()
                 
                 if resultado:
-                    # Para la descarga por ID, por defecto damos el oficio con QR (más útil)
-                    nombre_bd = resultado['nombre_con_qr']
+                    # IMPORTANTE: Buscar primero la carta de estado (sin "_con_QR")
+                    # ya que el QR debería apuntar a la carta original, no al oficio con QR
+                    directorio = app.config['OUTPUT_FOLDER']
+                    archivos = os.listdir(directorio)
                     
-                    # Extraer del metadata
-                    metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
-                    oficio_original = metadata.get('oficio_relacionado_sin_id', None)
-                    if oficio_original:
-                        nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
-                    else:
-                        # Fallback: usar el nombre pero intentar quitar el ID
-                        partes = nombre_bd.split('_', 1)
-                        nombre_mostrar = partes[1] if len(partes) > 1 else nombre_bd
+                    # Buscar la carta de estado (sin "_con_QR.pdf")
+                    archivos_carta = [archivo for archivo in archivos 
+                                     if documento_id in archivo and "_con_QR.pdf" not in archivo]
+                    
+                    if archivos_carta:
+                        # Encontramos la carta original, enviarla
+                        archivo_encontrado = archivos_carta[0]
+                        ruta_completa = os.path.join(directorio, archivo_encontrado)
+                        
+                        # Establecer el nombre de visualización
+                        nombre_mostrar = resultado['nombre_original_sin_id'] if resultado['nombre_original_sin_id'] else archivo_encontrado.split('_', 1)[1]
+                        
+                        app.logger.info(f"Enviando carta de estado: {ruta_completa} con nombre: {nombre_mostrar}")
+                        return send_file(ruta_completa, as_attachment=True, download_name=nombre_mostrar)
+                    
+                    # Si no se encontró la carta, buscar el oficio con QR como fallback
+                    archivos_oficio = [archivo for archivo in archivos 
+                                      if documento_id in archivo and "_con_QR.pdf" in archivo]
+                    
+                    if archivos_oficio:
+                        archivo_encontrado = archivos_oficio[0]
+                        ruta_completa = os.path.join(directorio, archivo_encontrado)
+                        
+                        # Extraer del metadata
+                        metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
+                        oficio_original = metadata.get('oficio_relacionado_sin_id', None)
+                        if oficio_original:
+                            nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
+                        else:
+                            nombre_mostrar = archivo_encontrado.split('_', 1)[1] if '_' in archivo_encontrado else archivo_encontrado
+                        
+                        app.logger.info(f"Enviando oficio con QR (fallback): {ruta_completa} con nombre: {nombre_mostrar}")
+                        return send_file(ruta_completa, as_attachment=True, download_name=nombre_mostrar)
         
-        # Buscar el archivo en el sistema
+        # Buscar cualquier archivo con el ID si no se encontró en la base de datos
         directorio = app.config['OUTPUT_FOLDER']
         archivos = os.listdir(directorio)
-        archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo and "_con_QR.pdf" in archivo]
         
-        # Si no hay oficio con QR, buscar cualquier archivo con el ID
-        if not archivos_coincidentes:
-            archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo]
+        # Priorizar archivos sin "_con_QR.pdf" (carta de estado)
+        archivos_carta = [archivo for archivo in archivos 
+                         if documento_id in archivo and "_con_QR.pdf" not in archivo]
+        
+        if archivos_carta:
+            archivo_encontrado = archivos_carta[0]
+            ruta_completa = os.path.join(directorio, archivo_encontrado)
+            nombre_mostrar = archivo_encontrado.split('_', 1)[1] if '_' in archivo_encontrado else archivo_encontrado
+            app.logger.info(f"Enviando carta (búsqueda directa): {ruta_completa} con nombre: {nombre_mostrar}")
+            return send_file(ruta_completa, as_attachment=True, download_name=nombre_mostrar)
+        
+        # Fallback a cualquier archivo con el ID si no hay carta
+        archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo]
         
         if not archivos_coincidentes:
             app.logger.error(f"No se encontró ningún archivo con el ID: {documento_id}")
@@ -502,7 +537,7 @@ def descargar_por_id(documento_id):
             partes = archivo_encontrado.split('_', 1)
             nombre_mostrar = partes[1] if len(partes) > 1 else archivo_encontrado
         
-        app.logger.info(f"Enviando archivo: {ruta_completa} con nombre: {nombre_mostrar}")
+        app.logger.info(f"Enviando archivo (último recurso): {ruta_completa} con nombre: {nombre_mostrar}")
         return send_file(ruta_completa, as_attachment=True, download_name=nombre_mostrar)
         
     except Exception as e:
