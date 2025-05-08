@@ -58,16 +58,8 @@ def guardar_datos_bd(datos):
     
     try:
         with conexion.cursor() as cursor:
-            # Verificar si la tabla tiene la columna nombre_original_sin_id
-            # Si no existe, intentar crearla
-            try:
-                cursor.execute("""
-                ALTER TABLE documentos_qr ADD COLUMN IF NOT EXISTS 
-                nombre_original_sin_id VARCHAR(255) AFTER nombre_original
-                """)
-                conexion.commit()
-            except pymysql.MySQLError as e:
-                app.logger.warning(f"No se pudo verificar/crear columna: {e}")
+            # Ya no intentamos crear la columna porque ya existe
+            # Ahora simplemente insertamos los datos
             
             # Insertar los datos en la tabla
             cursor.execute("""
@@ -289,7 +281,6 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_size=80, margin_x=100, mar
             "nombre_original": nombre_con_id,  # Guardar con el nombre que incluye ID
             "nombre_original_sin_id": carta_data["nombre_original"],  # Nombre original sin ID
             "nombre_con_qr": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
-            "nombre_con_qr_sin_id": f"{nombre_sin_extension}_con_QR.pdf", # Nombre del oficio sin ID
             "s3_key": f"cartas/{carta_data['id']}/{nombre_con_id}",
             "s3_url": f"https://menuidac.com/api/descargar/documento/{carta_data['id']}",
             "tamano_bytes": carta_data["tamano_bytes"],
@@ -316,6 +307,7 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_size=80, margin_x=100, mar
             return {
                 "carta_guardada": ruta_copia_carta,
                 "oficio_con_qr": ruta_oficio_con_qr,
+                "oficio_con_qr_url": f"/api/descargar/{os.path.basename(ruta_oficio_con_qr)}",
                 "id_documento": carta_data["id"],
                 "success": True
             }
@@ -385,13 +377,6 @@ def procesar_pdfs():
         resultado = procesar_archivos_pdf(carta_data, oficio_data, qr_size, margin_x, margin_y)
         
         if resultado.get("success", False):
-            # Para el caso de éxito, ofrecer también la descarga del oficio con QR
-            oficio_con_qr = resultado.get("oficio_con_qr")
-            
-            # Reemplazar rutas locales con URLs relativas para la API
-            nombre_oficio_qr = os.path.basename(oficio_con_qr)
-            resultado["oficio_con_qr_url"] = f"/api/descargar/{nombre_oficio_qr}"
-            
             return jsonify(resultado), 200
         else:
             return jsonify(resultado), 500
@@ -423,7 +408,7 @@ def descargar_archivo(nombre_archivo):
             if conexion:
                 with conexion.cursor() as cursor:
                     cursor.execute("""
-                    SELECT nombre_original_sin_id, nombre_con_qr_sin_id, metadata 
+                    SELECT nombre_original_sin_id, metadata 
                     FROM documentos_qr WHERE id = %s
                     """, (id_documento,))
                     resultado = cursor.fetchone()
@@ -433,17 +418,14 @@ def descargar_archivo(nombre_archivo):
                         # Determinar si es un oficio con QR o una carta
                         if "_con_QR.pdf" in nombre_seguro:
                             # Es un oficio con QR
-                            if resultado['nombre_con_qr_sin_id']:
-                                nombre_mostrar = resultado['nombre_con_qr_sin_id']
+                            # Extraer del metadata
+                            metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
+                            oficio_original = metadata.get('oficio_relacionado_sin_id', None)
+                            if oficio_original:
+                                nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
                             else:
-                                # Extraer del metadata si no existe la columna
-                                metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
-                                oficio_original = metadata.get('oficio_relacionado_sin_id', None)
-                                if oficio_original:
-                                    nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
-                                else:
-                                    # Fallback: usar el nombre original pero quitar el ID
-                                    nombre_mostrar = nombre_seguro.split('_', 1)[1] if '_' in nombre_seguro else nombre_seguro
+                                # Fallback: usar el nombre original pero quitar el ID
+                                nombre_mostrar = nombre_seguro.split('_', 1)[1] if '_' in nombre_seguro else nombre_seguro
                         else:
                             # Es una carta
                             nombre_mostrar = resultado['nombre_original_sin_id'] if resultado['nombre_original_sin_id'] else nombre_seguro.split('_', 1)[1]
@@ -478,7 +460,7 @@ def descargar_por_id(documento_id):
         if conexion:
             with conexion.cursor() as cursor:
                 cursor.execute("""
-                SELECT nombre_original, nombre_original_sin_id, nombre_con_qr, nombre_con_qr_sin_id, metadata 
+                SELECT nombre_original, nombre_original_sin_id, nombre_con_qr, metadata 
                 FROM documentos_qr WHERE id = %s
                 """, (documento_id,))
                 resultado = cursor.fetchone()
@@ -488,19 +470,15 @@ def descargar_por_id(documento_id):
                     # Para la descarga por ID, por defecto damos el oficio con QR (más útil)
                     nombre_bd = resultado['nombre_con_qr']
                     
-                    # Si tenemos el nombre sin ID, lo usaremos para mostrar
-                    if resultado['nombre_con_qr_sin_id']:
-                        nombre_mostrar = resultado['nombre_con_qr_sin_id']
+                    # Extraer del metadata
+                    metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
+                    oficio_original = metadata.get('oficio_relacionado_sin_id', None)
+                    if oficio_original:
+                        nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
                     else:
-                        # Extraer del metadata si no existe la columna
-                        metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
-                        oficio_original = metadata.get('oficio_relacionado_sin_id', None)
-                        if oficio_original:
-                            nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
-                        else:
-                            # Fallback: usar el nombre pero intentar quitar el ID
-                            partes = nombre_bd.split('_', 1)
-                            nombre_mostrar = partes[1] if len(partes) > 1 else nombre_bd
+                        # Fallback: usar el nombre pero intentar quitar el ID
+                        partes = nombre_bd.split('_', 1)
+                        nombre_mostrar = partes[1] if len(partes) > 1 else nombre_bd
         
         # Buscar el archivo en el sistema
         directorio = app.config['OUTPUT_FOLDER']
