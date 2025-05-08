@@ -395,6 +395,46 @@ def procesar_pdfs():
         app.logger.error(f"Error en el endpoint: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
 
+# Función para obtener el nombre original de un documento
+def obtener_nombre_original(id_documento, nombre_archivo_completo=""):
+    """Obtiene el nombre original del documento desde la base de datos"""
+    conexion = conectar_bd()
+    if not conexion:
+        app.logger.warning(f"No se pudo conectar a la BD para obtener el nombre original")
+        return nombre_archivo_completo
+    
+    try:
+        with conexion.cursor() as cursor:
+            # Consultar los datos del documento
+            cursor.execute("SELECT nombre_original, nombre_con_qr, metadata FROM documentos_qr WHERE id = %s", (id_documento,))
+            documento = cursor.fetchone()
+            
+            if documento:
+                # Si el nombre de archivo está vacío, siempre devolver el de la carta
+                if not nombre_archivo_completo:
+                    return documento["nombre_original"]  # Nombre original de la carta
+                    
+                # Determinar si estamos buscando la carta o el oficio con QR
+                if "_con_QR.pdf" in nombre_archivo_completo:
+                    return documento["nombre_con_qr"]  # Nombre original del oficio
+                else:
+                    return documento["nombre_original"]  # Nombre original de la carta
+            
+            app.logger.warning(f"No se encontró el documento con ID {id_documento} en la base de datos")
+    
+    except pymysql.MySQLError as e:
+        app.logger.error(f"Error al consultar la base de datos: {e}")
+    finally:
+        conexion.close()
+    
+    # Si hay algún problema y tenemos un nombre de archivo, intentar extraer el nombre
+    if nombre_archivo_completo:
+        partes = nombre_archivo_completo.split('_', 1)
+        if len(partes) > 1:
+            return partes[1]  # Retorna el nombre sin el ID
+    
+    return nombre_archivo_completo
+
 # Endpoint para descargar archivos procesados por nombre (internamente con ID)
 @app.route('/api/descargar/<nombre_archivo>', methods=['GET'])
 def descargar_archivo(nombre_archivo):
@@ -413,11 +453,6 @@ def descargar_archivo(nombre_archivo):
             
             # Buscar en la base de datos el nombre original
             nombre_descarga = obtener_nombre_original(id_documento, nombre_archivo)
-            
-            # Si es un oficio con QR, añadir sufijo
-            """if "_con_QR.pdf" in nombre_archivo:
-                nombre_base, extension = os.path.splitext(nombre_descarga)
-                nombre_descarga = f"{nombre_base}_con_QR{extension}"""
             
             # Enviar el archivo con el nombre original
             return send_file(ruta_archivo, as_attachment=True, download_name=nombre_descarga)
@@ -466,11 +501,6 @@ def descargar_por_id(documento_id):
             # Obtener el nombre original del documento
             nombre_descarga = obtener_nombre_original(documento_id, archivo_encontrado)
             
-            # Si es un oficio con QR, añadir sufijo
-            """if "_con_QR.pdf" in archivo_encontrado:
-                nombre_base, extension = os.path.splitext(nombre_descarga)
-                nombre_descarga = f"{nombre_base}_con_QR{extension}"""
-            
             # Devolver el archivo con el nombre original
             return send_file(ruta_completa, as_attachment=True, download_name=nombre_descarga)
             
@@ -508,8 +538,15 @@ def descargar_qr_imagen(documento_id):
             else:
                 return jsonify({"error": "Imagen QR no encontrada", "success": False}), 404
         
-        # Nombre personalizado para la descarga (primeros 5 caracteres del ID + "_QR.jpg")
-        nombre_descarga = f"{documento_id[:5]}_QR.jpg"
+        # Obtener el nombre de la carta de estado de la base de datos
+        nombre_carta = obtener_nombre_original(documento_id, "")  # El segundo parámetro está vacío ya que solo nos interesa la carta
+        if nombre_carta:
+            # Extraer el nombre base sin extensión y añadir sufijo QR
+            nombre_base, extension = os.path.splitext(nombre_carta)
+            nombre_descarga = f"{nombre_base}_QR.jpg"
+        else:
+            # Fallback a los primeros 5 caracteres del ID si no se encuentra el nombre
+            nombre_descarga = f"{documento_id[:5]}_QR.jpg"
         
         return send_file(ruta_qr, mimetype='image/jpeg', as_attachment=True, 
                         download_name=nombre_descarga)
@@ -517,39 +554,6 @@ def descargar_qr_imagen(documento_id):
     except Exception as e:
         app.logger.error(f"Error al descargar imagen QR: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
-
-def obtener_nombre_original(id_documento, nombre_archivo_completo):
-    """Obtiene el nombre original del documento desde la base de datos"""
-    conexion = conectar_bd()
-    if not conexion:
-        app.logger.warning(f"No se pudo conectar a la BD para obtener el nombre original, usando nombre con ID: {nombre_archivo_completo}")
-        return nombre_archivo_completo
-    
-    try:
-        with conexion.cursor() as cursor:
-            # Consultar los datos del documento
-            cursor.execute("SELECT nombre_original, nombre_con_qr, metadata FROM documentos_qr WHERE id = %s", (id_documento,))
-            documento = cursor.fetchone()
-            
-            if documento:
-                # Determinar si estamos buscando la carta o el oficio con QR
-                if "_con_QR.pdf" in nombre_archivo_completo:
-                    return documento["nombre_con_qr"]  # Nombre original del oficio
-                else:
-                    return documento["nombre_original"]  # Nombre original de la carta
-            
-            app.logger.warning(f"No se encontró el documento con ID {id_documento} en la base de datos")
-    
-    except pymysql.MySQLError as e:
-        app.logger.error(f"Error al consultar la base de datos: {e}")
-    finally:
-        conexion.close()
-    
-    # Si hay algún problema, devolver el nombre que incluye el ID
-    partes = nombre_archivo_completo.split('_', 1)
-    if len(partes) > 1:
-        return partes[1]  # Retorna el nombre sin el ID
-    return nombre_archivo_completo
 
 if __name__ == '__main__':
     # Configurar logging
