@@ -415,9 +415,9 @@ def descargar_archivo(nombre_archivo):
             nombre_descarga = obtener_nombre_original(id_documento, nombre_archivo)
             
             # Si es un oficio con QR, añadir sufijo
-            if "_con_QR.pdf" in nombre_archivo:
+            """if "_con_QR.pdf" in nombre_archivo:
                 nombre_base, extension = os.path.splitext(nombre_descarga)
-                nombre_descarga = f"{nombre_base}_con_QR{extension}"
+                nombre_descarga = f"{nombre_base}_con_QR{extension}"""
             
             # Enviar el archivo con el nombre original
             return send_file(ruta_archivo, as_attachment=True, download_name=nombre_descarga)
@@ -467,9 +467,9 @@ def descargar_por_id(documento_id):
             nombre_descarga = obtener_nombre_original(documento_id, archivo_encontrado)
             
             # Si es un oficio con QR, añadir sufijo
-            if "_con_QR.pdf" in archivo_encontrado:
+            """if "_con_QR.pdf" in archivo_encontrado:
                 nombre_base, extension = os.path.splitext(nombre_descarga)
-                nombre_descarga = f"{nombre_base}_con_QR{extension}"
+                nombre_descarga = f"{nombre_base}_con_QR{extension}"""
             
             # Devolver el archivo con el nombre original
             return send_file(ruta_completa, as_attachment=True, download_name=nombre_descarga)
