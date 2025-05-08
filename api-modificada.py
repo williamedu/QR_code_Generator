@@ -167,7 +167,7 @@ def generar_qr_con_datos(datos):
     
     return temp_qr_file.name, qr_data, ruta_jpg
 
-def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
+def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data, qr_size=80, margin_x=100, margin_y=260):
     """Agrega un código QR al oficio y retorna el nuevo PDF"""
     # Nombre para el archivo resultante
     nombre_original = oficio_data["nombre_original"]
@@ -189,12 +189,10 @@ def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
         qr_buffer = BytesIO()
         qr_pdf = canvas.Canvas(qr_buffer, pagesize=(page_width, page_height))
         
-        # Configurar tamaño y posición del QR
-        qr_size = 80  # Tamaño reducido del QR
-        margin_x = 100  # Margen desde la derecha
-        margin_y = 260  # Margen desde abajo - Para subir el QR
+        # Usar los parámetros enviados para configurar el QR
+        app.logger.info(f"Usando parámetros personalizados: qr_size={qr_size}, margin_x={margin_x}, margin_y={margin_y}")
         
-        # Dibujar el QR
+        # Dibujar el QR con los valores de los parámetros
         qr_pdf.drawImage(
             qr_image_path, 
             page_width - qr_size - margin_x,
@@ -249,11 +247,12 @@ def agregar_qr_a_oficio(oficio_data, qr_image_path, qr_data):
             os.unlink(qr_image_path)
         return None
 
-def procesar_archivos_pdf(carta_data, oficio_data, qr_separado=False):
+def procesar_archivos_pdf(carta_data, oficio_data, qr_separado=False, qr_size=80, margin_x=100, margin_y=260):
     """Procesa los dos archivos PDF recibidos"""
     app.logger.info(f"Procesando carta: {carta_data['nombre_original']}")
     app.logger.info(f"Procesando oficio: {oficio_data['nombre_original']}")
     app.logger.info(f"QR separado solicitado: {qr_separado}")
+    app.logger.info(f"Parámetros QR: tamaño={qr_size}, margen_x={margin_x}, margen_y={margin_y}")
     
     try:
         # 1. Extraer información de la carta de estado
@@ -270,8 +269,8 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_separado=False):
             f.write(carta_data['pdf_data'])
         app.logger.info(f"Carta guardada en: {ruta_copia_carta}")
         
-        # 4. Añadir el QR al oficio
-        ruta_oficio_con_qr = agregar_qr_a_oficio(oficio_data, qr_path, qr_data)
+        # 4. Añadir el QR al oficio - ahora pasamos los parámetros de tamaño y posición
+        ruta_oficio_con_qr = agregar_qr_a_oficio(oficio_data, qr_path, qr_data, qr_size, margin_x, margin_y)
         
         if not ruta_oficio_con_qr:
             return {
@@ -301,7 +300,12 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_separado=False):
                 "ruta_oficio_con_qr": ruta_oficio_con_qr,
                 "nombre_interno_oficio": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
                 "ruta_qr_jpg": qr_jpg_path if qr_separado else None,
-                "fecha_procesamiento": datetime.datetime.now().isoformat()
+                "fecha_procesamiento": datetime.datetime.now().isoformat(),
+                "parametros_qr": {
+                    "qr_size": qr_size,
+                    "margin_x": margin_x,
+                    "margin_y": margin_y
+                }
             }
         }
         
@@ -367,6 +371,24 @@ def procesar_pdfs():
         # Obtener parámetro para generar QR separado (checkbox)
         qr_separado = request.form.get('qr_separado', 'false').lower() == 'true'
         
+        # NUEVO: Obtener los parámetros de los sliders enviados desde Unity
+        # Si no se envían, usar valores predeterminados
+        try:
+            qr_size = int(request.form.get('qr_size', '80'))
+            margin_x = int(request.form.get('margin_x', '100'))
+            margin_y = int(request.form.get('margin_y', '260'))
+            
+            # Registrar en el log los valores recibidos
+            app.logger.info(f"Parámetros recibidos de Unity: qr_size={qr_size}, margin_x={margin_x}, margin_y={margin_y}")
+            
+        except ValueError as e:
+            app.logger.error(f"Error al convertir los parámetros de los sliders: {e}")
+            # Si hay error en la conversión, usar valores predeterminados
+            qr_size = 80
+            margin_x = 100
+            margin_y = 260
+            app.logger.info(f"Usando valores predeterminados: qr_size={qr_size}, margin_x={margin_x}, margin_y={margin_y}")
+        
         # Extraer datos de la carta de estado
         carta_data = extraer_datos_carta_estado(archivo_carta)
         
@@ -376,8 +398,8 @@ def procesar_pdfs():
             "pdf_data": archivo_oficio.read()
         }
         
-        # Procesar los archivos
-        resultado = procesar_archivos_pdf(carta_data, oficio_data, qr_separado)
+        # Procesar los archivos con los nuevos parámetros
+        resultado = procesar_archivos_pdf(carta_data, oficio_data, qr_separado, qr_size, margin_x, margin_y)
         
         if resultado.get("success", False):
             # Para el caso de éxito, ofrecer también la descarga del oficio con QR
