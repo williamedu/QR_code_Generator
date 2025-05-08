@@ -58,27 +58,15 @@ def guardar_datos_bd(datos):
     
     try:
         with conexion.cursor() as cursor:
-            # Verificar si la tabla tiene la columna nombre_original_sin_id
-            # Si no existe, intentar crearla
-            try:
-                cursor.execute("""
-                ALTER TABLE documentos_qr ADD COLUMN IF NOT EXISTS 
-                nombre_original_sin_id VARCHAR(255) AFTER nombre_original
-                """)
-                conexion.commit()
-            except pymysql.MySQLError as e:
-                app.logger.warning(f"No se pudo verificar/crear columna: {e}")
-            
             # Insertar los datos en la tabla
             cursor.execute("""
             INSERT INTO documentos_qr (
-                id, nombre_original, nombre_original_sin_id, nombre_con_qr, s3_bucket, s3_key, 
+                id, nombre_original, nombre_con_qr, s3_bucket, s3_key, 
                 s3_url, tamano_archivo, qr_data, descripcion, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 datos["id"],
-                datos["nombre_original"],         # Nombre con ID para sistema
-                datos["nombre_original_sin_id"],  # Nombre original sin ID
+                datos["nombre_original"],
                 datos["nombre_con_qr"],
                 "docs-qr-bucket",  # Nombre del bucket (simulado por ahora)
                 datos["s3_key"],
@@ -280,16 +268,10 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_size=80, margin_x=100, mar
         # 5. Preparar datos para la base de datos
         nombre_sin_extension = os.path.splitext(oficio_data['nombre_original'])[0]
         
-        # Guardar el nombre original sin ID para uso posterior
-        nombre_oficio_sin_id = oficio_data['nombre_original']
-        nombre_carta_sin_id = carta_data['nombre_original']
-        
         datos_bd = {
             "id": carta_data["id"],
             "nombre_original": nombre_con_id,  # Guardar con el nombre que incluye ID
-            "nombre_original_sin_id": carta_data["nombre_original"],  # Nombre original sin ID
             "nombre_con_qr": f"{carta_data['id']}_{nombre_sin_extension}_con_QR.pdf",
-            "nombre_con_qr_sin_id": f"{nombre_sin_extension}_con_QR.pdf", # Nombre del oficio sin ID
             "s3_key": f"cartas/{carta_data['id']}/{nombre_con_id}",
             "s3_url": f"https://menuidac.com/api/descargar/documento/{carta_data['id']}",
             "tamano_bytes": carta_data["tamano_bytes"],
@@ -297,7 +279,6 @@ def procesar_archivos_pdf(carta_data, oficio_data, qr_size=80, margin_x=100, mar
             "descripcion": f"Carta de estado para oficio: {oficio_data['nombre_original']}",
             "metadata": {
                 "oficio_relacionado": oficio_data['nombre_original'],
-                "oficio_relacionado_sin_id": nombre_oficio_sin_id,
                 "ruta_oficio_con_qr": ruta_oficio_con_qr,
                 "fecha_procesamiento": datetime.datetime.now().isoformat(),
                 "configuracion_qr": {
@@ -405,60 +386,13 @@ def procesar_pdfs():
 def descargar_archivo(nombre_archivo):
     """Permite descargar un archivo procesado por su nombre"""
     try:
-        # Asegurar que el nombre del archivo es seguro
-        nombre_seguro = secure_filename(nombre_archivo)
-        ruta_archivo = os.path.join(app.config['OUTPUT_FOLDER'], nombre_seguro)
+        ruta_archivo = os.path.join(app.config['OUTPUT_FOLDER'], secure_filename(nombre_archivo))
         
         if not os.path.exists(ruta_archivo):
             app.logger.error(f"Archivo no encontrado: {ruta_archivo}")
             return jsonify({"error": "Archivo no encontrado", "success": False}), 404
-        
-        # Extraer el ID del nombre del archivo (si existe)
-        partes = nombre_seguro.split('_', 1)
-        if len(partes) > 1:
-            id_documento = partes[0]
             
-            # Intentar obtener el nombre original de la base de datos
-            conexion = conectar_bd()
-            if conexion:
-                with conexion.cursor() as cursor:
-                    cursor.execute("""
-                    SELECT nombre_original_sin_id, nombre_con_qr_sin_id, metadata 
-                    FROM documentos_qr WHERE id = %s
-                    """, (id_documento,))
-                    resultado = cursor.fetchone()
-                    conexion.close()
-                    
-                    if resultado:
-                        # Determinar si es un oficio con QR o una carta
-                        if "_con_QR.pdf" in nombre_seguro:
-                            # Es un oficio con QR
-                            if resultado['nombre_con_qr_sin_id']:
-                                nombre_mostrar = resultado['nombre_con_qr_sin_id']
-                            else:
-                                # Extraer del metadata si no existe la columna
-                                metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
-                                oficio_original = metadata.get('oficio_relacionado_sin_id', None)
-                                if oficio_original:
-                                    nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
-                                else:
-                                    # Fallback: usar el nombre original pero quitar el ID
-                                    nombre_mostrar = nombre_seguro.split('_', 1)[1] if '_' in nombre_seguro else nombre_seguro
-                        else:
-                            # Es una carta
-                            nombre_mostrar = resultado['nombre_original_sin_id'] if resultado['nombre_original_sin_id'] else nombre_seguro.split('_', 1)[1]
-                    else:
-                        # No se encontró en la base de datos, usar el nombre sin el ID
-                        nombre_mostrar = nombre_seguro.split('_', 1)[1] if '_' in nombre_seguro else nombre_seguro
-            else:
-                # No se pudo conectar a la BD, usar el nombre sin el ID
-                nombre_mostrar = nombre_seguro.split('_', 1)[1] if '_' in nombre_seguro else nombre_seguro
-        else:
-            # No tiene formato con ID, usar el nombre tal cual
-            nombre_mostrar = nombre_seguro
-            
-        app.logger.info(f"Enviando archivo: {ruta_archivo} con nombre: {nombre_mostrar}")
-        return send_file(ruta_archivo, as_attachment=True, download_name=nombre_mostrar)
+        return send_file(ruta_archivo, as_attachment=True)
         
     except Exception as e:
         app.logger.error(f"Error al descargar archivo: {str(e)}")
@@ -471,61 +405,39 @@ def descargar_por_id(documento_id):
     try:
         app.logger.info(f"Buscando documento con ID: {documento_id}")
         
-        # Primero intentar obtener información de la base de datos
-        conexion = conectar_bd()
-        nombre_mostrar = None
-        
-        if conexion:
-            with conexion.cursor() as cursor:
-                cursor.execute("""
-                SELECT nombre_original, nombre_original_sin_id, nombre_con_qr, nombre_con_qr_sin_id, metadata 
-                FROM documentos_qr WHERE id = %s
-                """, (documento_id,))
-                resultado = cursor.fetchone()
-                conexion.close()
-                
-                if resultado:
-                    # Para la descarga por ID, por defecto damos el oficio con QR (más útil)
-                    nombre_bd = resultado['nombre_con_qr']
-                    
-                    # Si tenemos el nombre sin ID, lo usaremos para mostrar
-                    if resultado['nombre_con_qr_sin_id']:
-                        nombre_mostrar = resultado['nombre_con_qr_sin_id']
-                    else:
-                        # Extraer del metadata si no existe la columna
-                        metadata = json.loads(resultado['metadata']) if resultado['metadata'] else {}
-                        oficio_original = metadata.get('oficio_relacionado_sin_id', None)
-                        if oficio_original:
-                            nombre_mostrar = f"{os.path.splitext(oficio_original)[0]}_con_QR.pdf"
-                        else:
-                            # Fallback: usar el nombre pero intentar quitar el ID
-                            partes = nombre_bd.split('_', 1)
-                            nombre_mostrar = partes[1] if len(partes) > 1 else nombre_bd
-        
-        # Buscar el archivo en el sistema
+        # Buscar en el directorio configurado cualquier archivo que contenga el ID
         directorio = app.config['OUTPUT_FOLDER']
-        archivos = os.listdir(directorio)
-        archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo and "_con_QR.pdf" in archivo]
         
-        # Si no hay oficio con QR, buscar cualquier archivo con el ID
-        if not archivos_coincidentes:
+        try:
+            # Listar todos los archivos en el directorio
+            archivos = os.listdir(directorio)
+            app.logger.info(f"Total de archivos en el directorio: {len(archivos)}")
+            
+            # Filtrar archivos que contengan el ID
             archivos_coincidentes = [archivo for archivo in archivos if documento_id in archivo]
-        
-        if not archivos_coincidentes:
-            app.logger.error(f"No se encontró ningún archivo con el ID: {documento_id}")
-            return jsonify({"error": "Archivo no encontrado", "success": False}), 404
-        
-        # Usar el primer archivo que coincida
-        archivo_encontrado = archivos_coincidentes[0]
-        ruta_completa = os.path.join(directorio, archivo_encontrado)
-        
-        # Si no tenemos un nombre para mostrar, extraer del nombre del archivo
-        if not nombre_mostrar:
-            partes = archivo_encontrado.split('_', 1)
-            nombre_mostrar = partes[1] if len(partes) > 1 else archivo_encontrado
-        
-        app.logger.info(f"Enviando archivo: {ruta_completa} con nombre: {nombre_mostrar}")
-        return send_file(ruta_completa, as_attachment=True, download_name=nombre_mostrar)
+            app.logger.info(f"Archivos que coinciden con el ID {documento_id}: {archivos_coincidentes}")
+            
+            if not archivos_coincidentes:
+                app.logger.error(f"No se encontró ningún archivo con el ID: {documento_id}")
+                return jsonify({"error": "Archivo no encontrado", "success": False}), 404
+            
+            # Usar el primer archivo que coincida
+            archivo_encontrado = archivos_coincidentes[0]
+            ruta_completa = os.path.join(directorio, archivo_encontrado)
+            
+            app.logger.info(f"Archivo encontrado: {ruta_completa}")
+            
+            # Verificar si el archivo existe
+            if not os.path.exists(ruta_completa):
+                app.logger.error(f"El archivo coincidente no existe: {ruta_completa}")
+                return jsonify({"error": "Archivo existe en lista pero no en sistema", "success": False}), 404
+            
+            # Devolver el archivo
+            return send_file(ruta_completa, as_attachment=True)
+            
+        except Exception as e:
+            app.logger.error(f"Error al buscar en el directorio: {str(e)}")
+            return jsonify({"error": f"Error al buscar en el directorio: {str(e)}", "success": False}), 500
         
     except Exception as e:
         app.logger.error(f"Error al buscar documento por ID: {str(e)}")
