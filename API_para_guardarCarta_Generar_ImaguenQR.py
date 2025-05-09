@@ -8,8 +8,8 @@ import shutil
 from io import BytesIO
 import pymysql
 import qrcode
+from PyPDF2 import PdfReader
 from PIL import Image  # Para convertir la imagen del QR
-import webbrowser  # Para abrir el navegador automáticamente
 
 # Importaciones para la API REST
 from flask import Flask, request, jsonify, send_file
@@ -116,7 +116,7 @@ def extraer_datos_carta_estado(archivo_pdf):
     app.logger.info(f"Datos extraídos con ID generado {documento_id}")
     return datos
 
-def generar_qr_con_datos(datos):
+def generar_qr_con_datos(datos, nombre_personalizado=None):
     """Genera un código QR con la información de la carta de estado"""
     # Crear la URL que iría en el QR con la IP y puerto del servidor
     url_base = "https://menuidac.com/api/descargar/documento/"
@@ -148,9 +148,13 @@ def generar_qr_con_datos(datos):
     
     qr_img = qr.make_image(fill_color="black", back_color="white")
     
-    # Guardar la imagen QR como PNG con el nombre original del archivo
-    nombre_base, extension = os.path.splitext(datos['nombre_original'])
-    nombre_qr_png = f"{nombre_base}_QR.png"
+    # Usar el nombre personalizado si se proporcionó, de lo contrario usar el nombre original
+    if nombre_personalizado:
+        nombre_qr_png = f"{nombre_personalizado}_QR.png"
+    else:
+        nombre_base, extension = os.path.splitext(datos['nombre_original'])
+        nombre_qr_png = f"{nombre_base}_QR.png"
+    
     ruta_qr_png = os.path.join(app.config['OUTPUT_FOLDER'], nombre_qr_png)
     
     # Guardar como PNG
@@ -160,13 +164,13 @@ def generar_qr_con_datos(datos):
     
     return ruta_qr_png, qr_data
 
-def procesar_carta_estado(carta_data):
+def procesar_carta_estado(carta_data, nombre_personalizado=None):
     """Procesa un solo archivo PDF (carta de estado) y genera QR"""
     app.logger.info(f"Procesando carta: {carta_data['nombre_original']}")
     
     try:
         # 1. Generar QR con la información relevante
-        ruta_qr_png, qr_data = generar_qr_con_datos(carta_data)
+        ruta_qr_png, qr_data = generar_qr_con_datos(carta_data, nombre_personalizado)
         
         # 2. Guardar una copia local de la carta de estado (incluir ID en el nombre)
         nombre_con_id = f"{carta_data['id']}_{carta_data['nombre_original']}"
@@ -196,6 +200,7 @@ def procesar_carta_estado(carta_data):
                 "nombre_interno_carta": nombre_con_id,
                 "ruta_qr_png": ruta_qr_png,
                 "qr_url": qr_url,
+                "nombre_personalizado": nombre_personalizado,
                 "fecha_procesamiento": datetime.datetime.now().isoformat()
             }
         }
@@ -211,6 +216,7 @@ def procesar_carta_estado(carta_data):
                 "id_documento": carta_data["id"],
                 "qr_png_path": ruta_qr_png,
                 "qr_png_url": qr_url,
+                "qr_personalizado": nombre_personalizado is not None,
                 "success": True
             }
             
@@ -237,8 +243,6 @@ def health_check():
 
 # Endpoint para procesar carta de estado
 @app.route('/api/procesar', methods=['POST'])
-# Endpoint para procesar carta de estado
-@app.route('/api/procesar', methods=['POST'])
 def procesar_carta():
     """Endpoint para recibir y procesar un archivo PDF (carta de estado)"""
     try:
@@ -256,14 +260,18 @@ def procesar_carta():
         if not archivo_carta.filename.lower().endswith('.pdf'):
             return jsonify({"error": "El archivo debe ser PDF", "success": False}), 400
         
+        # Obtener el nombre personalizado si se proporcionó
+        nombre_personalizado = request.form.get('nombre_qr_personalizado', None)
+        if nombre_personalizado:
+            app.logger.info(f"Nombre personalizado recibido: {nombre_personalizado}")
+        
         # Extraer datos de la carta de estado
         carta_data = extraer_datos_carta_estado(archivo_carta)
         
-        # Procesar la carta de estado
-        resultado = procesar_carta_estado(carta_data)
+        # Procesar la carta de estado con el nombre personalizado si existe
+        resultado = procesar_carta_estado(carta_data, nombre_personalizado)
         
         if resultado.get("success", False):
-            # Ya no intentamos abrir el navegador desde el servidor, dejamos eso a Unity
             app.logger.info(f"Documento procesado correctamente, enviando respuesta a cliente")
             return jsonify(resultado), 200
         else:
@@ -272,8 +280,7 @@ def procesar_carta():
     except Exception as e:
         app.logger.error(f"Error en el endpoint: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
-    
-    
+
 # Función para obtener el nombre original de un documento
 def obtener_nombre_original(id_documento, nombre_archivo_completo=""):
     """Obtiene el nombre original del documento desde la base de datos"""
@@ -404,21 +411,47 @@ def descargar_qr_imagen(documento_id):
         ruta_qr = os.path.join(directorio, archivos_coincidentes[0])
         app.logger.info(f"Imagen QR encontrada: {ruta_qr}")
         
-        # Obtener el nombre de la carta de estado de la base de datos
-        nombre_carta = obtener_nombre_original(documento_id, "")
-        if nombre_carta:
-            # Extraer el nombre base sin extensión y añadir sufijo QR
-            nombre_base, extension = os.path.splitext(nombre_carta)
-            nombre_descarga = f"{nombre_base}_QR.png"
-        else:
-            # Fallback a los primeros 5 caracteres del ID si no se encuentra el nombre
-            nombre_descarga = f"{documento_id[:5]}_QR.png"
+        # Obtener información del documento incluyendo si hay nombre personalizado
+        conexion = conectar_bd()
+        nombre_descarga = None
+        
+        if conexion:
+            try:
+                with conexion.cursor() as cursor:
+                    cursor.execute("SELECT nombre_original, metadata FROM documentos_qr WHERE id = %s", (documento_id,))
+                    documento = cursor.fetchone()
+                    
+                    if documento:
+                        metadata = json.loads(documento["metadata"])
+                        nombre_personalizado = metadata.get("nombre_personalizado", None)
+                        
+                        if nombre_personalizado:
+                            nombre_descarga = f"{nombre_personalizado}_QR.png"
+                        else:
+                            nombre_base, extension = os.path.splitext(documento["nombre_original"])
+                            nombre_descarga = f"{nombre_base}_QR.png"
+            except Exception as e:
+                app.logger.error(f"Error al buscar nombre personalizado: {e}")
+            finally:
+                conexion.close()
+        
+        # Si no se pudo obtener el nombre de la BD, usar enfoque alternativo
+        if not nombre_descarga:
+            nombre_base = os.path.splitext(os.path.basename(ruta_qr))[0]
+            nombre_descarga = f"{nombre_base}.png"
         
         # Determinar el tipo MIME basado en la extensión del archivo
         mimetype = 'image/png' if ruta_qr.lower().endswith('.png') else 'image/jpeg'
         
-        return send_file(ruta_qr, mimetype=mimetype, as_attachment=True, 
-                        download_name=nombre_descarga)
+        # Forzar descarga con attachment=True y nombre personalizado
+        response = send_file(ruta_qr, mimetype=mimetype, as_attachment=True, 
+                           download_name=nombre_descarga)
+                           
+        # Añadir cabeceras para forzar descarga
+        response.headers["Content-Disposition"] = f"attachment; filename={nombre_descarga}"
+        response.headers["Content-Type"] = mimetype
+        
+        return response
         
     except Exception as e:
         app.logger.error(f"Error al descargar imagen QR: {str(e)}")
@@ -427,7 +460,6 @@ def descargar_qr_imagen(documento_id):
 if __name__ == '__main__':
     # Configurar logging
     import logging
-    from PyPDF2 import PdfReader  # Para que esté disponible al iniciar
     
     logging.basicConfig(level=logging.INFO)
     
