@@ -237,6 +237,8 @@ def health_check():
 
 # Endpoint para procesar carta de estado
 @app.route('/api/procesar', methods=['POST'])
+# Endpoint para procesar carta de estado
+@app.route('/api/procesar', methods=['POST'])
 def procesar_carta():
     """Endpoint para recibir y procesar un archivo PDF (carta de estado)"""
     try:
@@ -261,29 +263,8 @@ def procesar_carta():
         resultado = procesar_carta_estado(carta_data)
         
         if resultado.get("success", False):
-            # Abrir el QR automaticamente en el navegador
-            qr_png_path = resultado.get("qr_png_path")
-            qr_png_url = resultado.get("qr_png_url")
-            
-            # URL para abrir en el navegador desde la API
-            qr_url_completa = f"https://menuidac.com{qr_png_url}"
-            
-            # La URL para usar desde Python para abrir archivos locales
-            qr_file_url = f"file:///{qr_png_path}"
-            
-            # Intentamos abrir el navegador con la URL del servidor
-            try:
-                webbrowser.open(qr_url_completa)
-                app.logger.info(f"Imagen QR abierta en navegador: {qr_url_completa}")
-            except Exception as e:
-                app.logger.error(f"Error al abrir navegador con URL remota: {str(e)}")
-                # Como fallback, intentar abrir el archivo local
-                try:
-                    webbrowser.open(qr_file_url)
-                    app.logger.info(f"Imagen QR abierta localmente en navegador: {qr_file_url}")
-                except Exception as e2:
-                    app.logger.error(f"Error al abrir navegador con archivo local: {str(e2)}")
-            
+            # Ya no intentamos abrir el navegador desde el servidor, dejamos eso a Unity
+            app.logger.info(f"Documento procesado correctamente, enviando respuesta a cliente")
             return jsonify(resultado), 200
         else:
             return jsonify(resultado), 500
@@ -291,7 +272,8 @@ def procesar_carta():
     except Exception as e:
         app.logger.error(f"Error en el endpoint: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
-
+    
+    
 # Función para obtener el nombre original de un documento
 def obtener_nombre_original(id_documento, nombre_archivo_completo=""):
     """Obtiene el nombre original del documento desde la base de datos"""
