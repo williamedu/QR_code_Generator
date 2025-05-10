@@ -117,6 +117,7 @@ def extraer_datos_carta_estado(archivo_pdf):
     return datos
 
 # Cambios en la función generar_qr_con_datos para guardar siempre el ID en el nombre del archivo
+# Modificación de la función generar_qr_con_datos para eliminar el sufijo _QR
 def generar_qr_con_datos(datos, nombre_personalizado=None):
     """Genera un código QR con la información de la carta de estado"""
     # Crear la URL que iría en el QR con la IP y puerto del servidor
@@ -149,15 +150,15 @@ def generar_qr_con_datos(datos, nombre_personalizado=None):
     
     qr_img = qr.make_image(fill_color="black", back_color="white")
     
-    # Guardar una versión personalizada
+    # Guardar una versión personalizada - sin el sufijo _QR
     if nombre_personalizado:
-        nombre_personalizado_qr = f"{nombre_personalizado}_QR.png"
+        nombre_personalizado_qr = f"{nombre_personalizado}.png"
         ruta_personalizada = os.path.join(app.config['OUTPUT_FOLDER'], nombre_personalizado_qr)
         qr_img.save(ruta_personalizada)
         app.logger.info(f"QR guardado con nombre personalizado en {ruta_personalizada}")
     
-    # Siempre guardar una versión con el ID para poder acceder por API
-    nombre_con_id = f"{datos['id']}_QR.png"
+    # Siempre guardar una versión con el ID para poder acceder por API - sin sufijo _QR
+    nombre_con_id = f"{datos['id']}.png"
     ruta_con_id = os.path.join(app.config['OUTPUT_FOLDER'], nombre_con_id)
     qr_img.save(ruta_con_id)
     
@@ -393,57 +394,65 @@ def descargar_por_id(documento_id):
         app.logger.error(f"Error al buscar documento por ID: {str(e)}")
         return jsonify({"error": str(e), "success": False}), 500
 
-# Corrección en el endpoint /api/descargar/qr/<documento_id>
+# Modificación del endpoint /api/descargar/qr/<documento_id> para usar nombres sin sufijo _QR
 @app.route('/api/descargar/qr/<documento_id>', methods=['GET'])
 def descargar_qr_imagen(documento_id):
     """Permite descargar la imagen del QR por el ID del documento"""
     try:
         app.logger.info(f"Buscando imagen QR con ID: {documento_id}")
         
-        # Primero, intentar encontrar el archivo con el nombre exacto ID_QR.png
-        nombre_qr_estandar = f"{documento_id}_QR.png"
+        # Primero, intentar encontrar el archivo con el nombre exacto ID.png (sin sufijo _QR)
+        nombre_qr_estandar = f"{documento_id}.png"
         ruta_qr_estandar = os.path.join(app.config['OUTPUT_FOLDER'], nombre_qr_estandar)
         
         if os.path.exists(ruta_qr_estandar):
             app.logger.info(f"Imagen QR encontrada con nombre estándar: {ruta_qr_estandar}")
             ruta_qr = ruta_qr_estandar
         else:
-            # Si no existe, buscar cualquier imagen que contenga el ID
-            directorio = app.config['OUTPUT_FOLDER']
-            archivos_coincidentes = [archivo for archivo in os.listdir(directorio) 
-                                if documento_id in archivo and archivo.endswith(('.png', '.jpg', '.jpeg'))]
+            # Intentar con el formato antiguo por compatibilidad
+            nombre_qr_antiguo = f"{documento_id}_QR.png"
+            ruta_qr_antiguo = os.path.join(app.config['OUTPUT_FOLDER'], nombre_qr_antiguo)
             
-            if not archivos_coincidentes:
-                # Última opción: buscar en la base de datos para obtener la ruta exacta
-                ruta_qr = None
-                conexion = conectar_bd()
-                
-                if conexion:
-                    try:
-                        with conexion.cursor() as cursor:
-                            cursor.execute("SELECT metadata FROM documentos_qr WHERE id = %s", (documento_id,))
-                            documento = cursor.fetchone()
-                            
-                            if documento:
-                                metadata = json.loads(documento["metadata"])
-                                ruta_qr = metadata.get("ruta_qr_png")
-                                
-                                if ruta_qr and os.path.exists(ruta_qr):
-                                    app.logger.info(f"Imagen QR encontrada mediante metadata: {ruta_qr}")
-                                else:
-                                    ruta_qr = None
-                    except Exception as e:
-                        app.logger.error(f"Error al consultar la base de datos: {e}")
-                    finally:
-                        conexion.close()
-                
-                if not ruta_qr:
-                    app.logger.error(f"No se encontró imagen QR para el ID: {documento_id}")
-                    return jsonify({"error": "Imagen QR no encontrada", "success": False}), 404
+            if os.path.exists(ruta_qr_antiguo):
+                app.logger.info(f"Imagen QR encontrada con formato antiguo: {ruta_qr_antiguo}")
+                ruta_qr = ruta_qr_antiguo
             else:
-                # Usar el primer archivo QR encontrado
-                ruta_qr = os.path.join(directorio, archivos_coincidentes[0])
-                app.logger.info(f"Imagen QR encontrada mediante búsqueda: {ruta_qr}")
+                # Si no existe, buscar cualquier imagen que contenga el ID
+                directorio = app.config['OUTPUT_FOLDER']
+                archivos_coincidentes = [archivo for archivo in os.listdir(directorio) 
+                                    if documento_id in archivo and archivo.endswith(('.png', '.jpg', '.jpeg'))]
+                
+                if not archivos_coincidentes:
+                    # Última opción: buscar en la base de datos para obtener la ruta exacta
+                    ruta_qr = None
+                    conexion = conectar_bd()
+                    
+                    if conexion:
+                        try:
+                            with conexion.cursor() as cursor:
+                                cursor.execute("SELECT metadata FROM documentos_qr WHERE id = %s", (documento_id,))
+                                documento = cursor.fetchone()
+                                
+                                if documento:
+                                    metadata = json.loads(documento["metadata"])
+                                    ruta_qr = metadata.get("ruta_qr_png")
+                                    
+                                    if ruta_qr and os.path.exists(ruta_qr):
+                                        app.logger.info(f"Imagen QR encontrada mediante metadata: {ruta_qr}")
+                                    else:
+                                        ruta_qr = None
+                        except Exception as e:
+                            app.logger.error(f"Error al consultar la base de datos: {e}")
+                        finally:
+                            conexion.close()
+                    
+                    if not ruta_qr:
+                        app.logger.error(f"No se encontró imagen QR para el ID: {documento_id}")
+                        return jsonify({"error": "Imagen QR no encontrada", "success": False}), 404
+                else:
+                    # Usar el primer archivo QR encontrado
+                    ruta_qr = os.path.join(directorio, archivos_coincidentes[0])
+                    app.logger.info(f"Imagen QR encontrada mediante búsqueda: {ruta_qr}")
         
         # Obtener información del documento incluyendo si hay nombre personalizado
         conexion = conectar_bd()
@@ -460,10 +469,12 @@ def descargar_qr_imagen(documento_id):
                         nombre_personalizado = metadata.get("nombre_personalizado", None)
                         
                         if nombre_personalizado:
-                            nombre_descarga = f"{nombre_personalizado}_QR.png"
+                            # Sin sufijo _QR
+                            nombre_descarga = f"{nombre_personalizado}.png"
                         else:
                             nombre_base, extension = os.path.splitext(documento["nombre_original"])
-                            nombre_descarga = f"{nombre_base}_QR.png"
+                            # Sin sufijo _QR
+                            nombre_descarga = f"{nombre_base}.png"
             except Exception as e:
                 app.logger.error(f"Error al buscar nombre personalizado: {e}")
             finally:
@@ -471,7 +482,11 @@ def descargar_qr_imagen(documento_id):
         
         # Si no se pudo obtener el nombre de la BD, usar el nombre del archivo
         if not nombre_descarga:
-            nombre_descarga = os.path.basename(ruta_qr)
+            # Eliminar sufijos si existen
+            nombre_base = os.path.basename(ruta_qr)
+            if "_QR" in nombre_base:
+                nombre_base = nombre_base.replace("_QR", "")
+            nombre_descarga = nombre_base
         
         # Determinar el tipo MIME basado en la extensión del archivo
         mimetype = 'image/png' if ruta_qr.lower().endswith('.png') else 'image/jpeg'
